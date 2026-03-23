@@ -225,7 +225,7 @@ async function installPrereqs(
     },
     {
       name: "Claude Code",
-      check: "command -v claude",
+      check: "test -x $HOME/.local/bin/claude",
       install: "curl -fsSL https://cli.claude.ai/install.sh | sh",
     },
   ];
@@ -241,7 +241,7 @@ async function installPrereqs(
           [
             "ssh", "-t", "-o", `ControlPath=${socket}`,
             config.host,
-            `bash -lc ${shellQuote(dep.install)}`,
+            dep.install,
           ],
           { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
         );
