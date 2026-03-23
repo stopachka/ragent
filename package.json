@@ -7,7 +7,7 @@
   },
   "scripts": {
     "dev": "bun run src/index.ts",
-    "build": "bun build src/index.ts --compile --outfile ragent",
+    "build": "bun build src/index.ts --compile --outfile ragent && cp ragent ~/.local/bin/ragent",
     "test": "bun test"
   },
   "devDependencies": {

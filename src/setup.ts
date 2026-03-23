@@ -80,12 +80,16 @@ async function installHook(
   const script = generateHookScript(localUser, remoteUser);
 
   // Create remote dirs
-  const { exitCode: mkdirExit } =
-    await $`ssh -o ControlPath=${socket} ${config.host} ${{
-      raw: "mkdir -p ~/.config/ragent ~/.claude",
-    }}`.nothrow();
+  const mkdirProc = Bun.spawn(
+    [
+      "ssh", "-o", `ControlPath=${socket}`,
+      config.host,
+      "mkdir -p ~/.config/ragent ~/.claude",
+    ],
+    { stdout: "inherit", stderr: "inherit" },
+  );
 
-  if (mkdirExit !== 0) {
+  if ((await mkdirProc.exited) !== 0) {
     console.error("Failed to create remote directories");
     return false;
   }
@@ -96,7 +100,7 @@ async function installHook(
       "ssh",
       "-o", `ControlPath=${socket}`,
       config.host,
-      "cat > ~/.config/ragent/fetch-file.sh && chmod +x ~/.config/ragent/fetch-file.sh",
+      "cat > $HOME/.config/ragent/fetch-file.sh && chmod +x $HOME/.config/ragent/fetch-file.sh",
     ],
     {
       stdin: new TextEncoder().encode(script),
@@ -110,20 +114,15 @@ async function installHook(
     return false;
   }
 
-  // Merge hook into remote ~/.claude/settings.json
+  // Merge hook into remote ~/.claude/settings.json (migrates old format automatically)
   const mergeScript = `
     SETTINGS_FILE="$HOME/.claude/settings.json"
     if [ ! -f "$SETTINGS_FILE" ]; then
       echo '{}' > "$SETTINGS_FILE"
     fi
 
-    if grep -q "ragent/fetch-file.sh" "$SETTINGS_FILE" 2>/dev/null; then
-      echo "Hook already installed"
-      exit 0
-    fi
-
     python3 -c "
-import json
+import json, sys
 settings_path = '$SETTINGS_FILE'
 with open(settings_path) as f:
     settings = json.load(f)
@@ -131,30 +130,171 @@ if 'hooks' not in settings:
     settings['hooks'] = {}
 if 'PreToolUse' not in settings['hooks']:
     settings['hooks']['PreToolUse'] = []
-for h in settings['hooks']['PreToolUse']:
-    if 'ragent' in h.get('command', ''):
-        print('Hook already installed')
-        exit(0)
-settings['hooks']['PreToolUse'].append({'matcher': 'Read', 'command': 'bash ~/.config/ragent/fetch-file.sh'})
+
+new_hook = {'matcher': 'Read', 'hooks': [{'type': 'command', 'command': 'bash ~/.config/ragent/fetch-file.sh'}]}
+hooks = settings['hooks']['PreToolUse']
+migrated = False
+
+for i, h in enumerate(hooks):
+    # Old format: {'matcher': ..., 'command': '...ragent...'}
+    if 'ragent' in h.get('command', '') and 'hooks' not in h:
+        hooks[i] = new_hook
+        migrated = True
+        break
+    # New format already present
+    for inner in h.get('hooks', []):
+        if 'ragent' in inner.get('command', ''):
+            print('Hook already installed')
+            sys.exit(0)
+
+if migrated:
+    print('Hook migrated to new format')
+else:
+    hooks.append(new_hook)
+    print('Hook installed')
+
 with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
-print('Hook installed')
 "
   `;
 
-  const { exitCode: mergeExit } =
-    await $`ssh -o ControlPath=${socket} ${config.host} ${mergeScript}`.nothrow();
+  const mergeProc = Bun.spawn(
+    [
+      "ssh", "-o", `ControlPath=${socket}`,
+      config.host,
+      mergeScript,
+    ],
+    { stdout: "inherit", stderr: "inherit" },
+  );
 
-  return mergeExit === 0;
+  return (await mergeProc.exited) === 0;
+}
+
+async function remoteExec(
+  host: string,
+  socket: string,
+  cmd: string,
+): Promise<{ exitCode: number; stdout: string }> {
+  const proc = Bun.spawn(
+    ["ssh", "-o", `ControlPath=${socket}`, host, `bash -lc ${shellQuote(cmd)}`],
+    { stdout: "pipe", stderr: "pipe" },
+  );
+  const stdout = await new Response(proc.stdout).text();
+  return { exitCode: await proc.exited, stdout: stdout.trim() };
+}
+
+function shellQuote(s: string): string {
+  return "'" + s.replace(/'/g, "'\\''") + "'";
+}
+
+async function prompt(question: string): Promise<boolean> {
+  process.stdout.write(`${question} [Y/n] `);
+  return new Promise((resolve) => {
+    const buf = Buffer.alloc(256);
+    const fd = require("node:fs").openSync("/dev/tty", "r");
+    const n = require("node:fs").readSync(fd, buf);
+    require("node:fs").closeSync(fd);
+    const answer = buf.slice(0, n).toString().trim().toLowerCase();
+    resolve(answer === "" || answer === "y" || answer === "yes");
+  });
+}
+
+async function installPrereqs(
+  config: RagentConfig,
+  socket: string,
+): Promise<void> {
+  const prereqs: { name: string; check: string; install: string }[] = [
+    {
+      name: "Homebrew",
+      check: "command -v brew",
+      install:
+        'NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+    },
+    {
+      name: "tmux",
+      check: "command -v tmux",
+      install: "brew install tmux",
+    },
+    {
+      name: "Node.js",
+      check: "command -v node",
+      install: "brew install node",
+    },
+    {
+      name: "Claude Code",
+      check: "command -v claude",
+      install: "npm install -g @anthropic-ai/claude-code",
+    },
+  ];
+
+  for (const dep of prereqs) {
+    const { exitCode } = await remoteExec(config.host, socket, dep.check);
+    if (exitCode === 0) {
+      console.log(`  ✓ ${dep.name}`);
+    } else {
+      const yes = await prompt(`  ✗ ${dep.name} not found. Install?`);
+      if (yes) {
+        const installProc = Bun.spawn(
+          [
+            "ssh", "-t", "-o", `ControlPath=${socket}`,
+            config.host,
+            `bash -lc ${shellQuote(dep.install)}`,
+          ],
+          { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
+        );
+        if ((await installProc.exited) !== 0) {
+          console.error(`    Failed to install ${dep.name}. Continuing...`);
+        } else {
+          console.log(`    ${dep.name} installed.`);
+        }
+      } else {
+        console.log(`    Skipped ${dep.name}.`);
+      }
+    }
+  }
+}
+
+async function promptInput(question: string): Promise<string> {
+  process.stdout.write(question);
+  const buf = Buffer.alloc(1024);
+  const fd = require("node:fs").openSync("/dev/tty", "r");
+  const n = require("node:fs").readSync(fd, buf);
+  require("node:fs").closeSync(fd);
+  return buf.slice(0, n).toString().trim();
 }
 
 /**
  * One-time setup:
+ * 0. Create .ragent.json if it doesn't exist
  * 1. Generate SSH key if needed
  * 2. Copy key to remote
  * 3. Install Claude Code hook on remote
+ * 4. Install remote prerequisites
  */
-export async function setup(config: RagentConfig): Promise<void> {
+export async function setup(config?: RagentConfig): Promise<void> {
+  // Step 0: Create .ragent.json if needed
+  if (!config) {
+    const configPath = `${process.cwd()}/.ragent.json`;
+    const host = await promptInput("Remote host (user@hostname): ");
+    if (!host) {
+      console.error("Host is required.");
+      process.exit(1);
+    }
+    const portsRaw = await promptInput("Ports to forward (comma-separated, or empty): ");
+    const ports = portsRaw
+      ? portsRaw.split(",").map((p) => p.trim()).filter(Boolean)
+      : [];
+
+    const rawConfig: Record<string, unknown> = { host };
+    if (ports.length > 0) rawConfig.ports = ports;
+
+    await Bun.write(configPath, JSON.stringify(rawConfig, null, 2) + "\n");
+    console.log(`Created ${configPath}\n`);
+
+    const { loadConfig } = await import("./config.ts");
+    config = await loadConfig();
+  }
+
   const home = homedir();
   const keyPath = join(home, ".ssh", "id_ed25519");
   const socket = sshSocketPath();
@@ -163,7 +303,14 @@ export async function setup(config: RagentConfig): Promise<void> {
   console.log("--- SSH Key ---");
   if (!(await Bun.file(keyPath).exists())) {
     console.log("Generating SSH key...");
-    await $`ssh-keygen -t ed25519 -f ${keyPath} -N ""`;
+    const keygen = Bun.spawn(
+      ["ssh-keygen", "-t", "ed25519", "-f", keyPath, "-N", ""],
+      { stdout: "inherit", stderr: "inherit" },
+    );
+    if ((await keygen.exited) !== 0) {
+      console.error("Failed to generate SSH key");
+      process.exit(1);
+    }
   } else {
     console.log(`SSH key exists: ${keyPath}`);
   }
@@ -198,16 +345,17 @@ export async function setup(config: RagentConfig): Promise<void> {
     console.error("Failed to install Claude Code hook.");
   }
 
-  // Step 5: Print remote prereqs
+  // Step 5: Check and install remote prerequisites
   console.log("\n--- Remote Prerequisites ---");
-  console.log("Make sure the following are installed on the remote:");
-  console.log("  1. tmux:       brew install tmux");
-  console.log("  2. Claude Code: npm install -g @anthropic-ai/claude-code");
-  console.log("  3. Authenticate: run 'claude' once on the remote");
-
-  console.log("\n--- Setup Complete ---");
-  console.log("Run `ragent` to connect!");
+  await installPrereqs(config, socket);
 
   // Clean up ControlMaster
   await $`ssh -O exit -o ControlPath=${socket} ${config.host}`.nothrow().quiet();
+
+  console.log("\n--- Setup Complete ---");
+  console.log("Connecting...\n");
+
+  // Auto-connect
+  const { connect } = await import("./connect.ts");
+  await connect(config);
 }

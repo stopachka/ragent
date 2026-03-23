@@ -2,6 +2,20 @@ import { $ } from "bun";
 import { type RagentConfig, parseHost, sshSocketPath } from "./config.ts";
 import { startFileServer, stopFileServer } from "./fileserver.ts";
 
+/** Sync local terminfo to remote so custom terminals (Ghostty, Kitty, etc.) work */
+async function syncTerminfo(host: string): Promise<void> {
+  const infocmp = Bun.spawn(["infocmp", "-x"], { stdout: "pipe", stderr: "pipe" });
+  const terminfo = await new Response(infocmp.stdout).text();
+  if ((await infocmp.exited) !== 0 || !terminfo) return;
+
+  const tic = Bun.spawn(["ssh", host, "tic", "-x", "-"], {
+    stdin: new TextEncoder().encode(terminfo),
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  await tic.exited;
+}
+
 /** Check if the SSH ControlMaster socket is alive */
 async function isSocketAlive(host: string): Promise<boolean> {
   const socket = sshSocketPath();
@@ -20,9 +34,8 @@ async function cleanStaleSocket(host: string): Promise<void> {
   if (!(await Bun.file(socket).exists())) return;
 
   if (!(await isSocketAlive(host))) {
-    const { unlinkSync } = await import("node:fs");
     try {
-      unlinkSync(socket);
+      await Bun.file(socket).delete();
     } catch {
       // ignore
     }
@@ -64,7 +77,7 @@ export function buildSshArgs(
   args.push("-R", `${fileServerPort}:localhost:${fileServerPort}`);
 
   args.push(config.host);
-  args.push(`tmux new-session -As ${config.session} -c ${config.dir}`);
+  args.push(`bash -lc 'tmux new-session -As ${config.session} -c ${config.dir}'`);
 
   return args;
 }
@@ -84,6 +97,8 @@ export async function connect(config: RagentConfig): Promise<void> {
   process.on("SIGINT", () => {
     interrupted = true;
   });
+
+  await syncTerminfo(config.host);
 
   while (true) {
     await cleanStaleSocket(config.host);

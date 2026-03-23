@@ -25,7 +25,7 @@ export function startFileServer(): number {
   server = Bun.serve({
     hostname: "127.0.0.1",
     port: 0, // auto-assign
-    fetch(req) {
+    async fetch(req) {
       const url = new URL(req.url);
 
       if (url.pathname === "/health") {
@@ -48,12 +48,10 @@ export function startFileServer(): number {
       }
 
       const file = Bun.file(filePath);
-      return file.exists().then((exists) => {
-        if (!exists) {
-          return new Response("File not found", { status: 404 });
-        }
-        return new Response(file);
-      });
+      if (!(await file.exists())) {
+        return new Response("File not found", { status: 404 });
+      }
+      return new Response(file);
     },
   });
 

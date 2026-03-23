@@ -1,5 +1,5 @@
-import { parseArgs } from "util";
-import { loadConfig } from "./config.ts";
+import { $ } from "bun";
+import { loadConfig, sshSocketPath } from "./config.ts";
 import { connect } from "./connect.ts";
 import { showStatus } from "./status.ts";
 import { pushFile } from "./push.ts";
@@ -10,11 +10,10 @@ ragent — Seamless remote Claude Code sessions
 
 Usage:
   ragent                  Connect (SSH + tmux + ports + file server)
+  ragent setup            First-time setup (config + SSH key + deps + connect)
   ragent status           Show connection status
   ragent push <file>      Push a file to remote
   ragent run <cmd...>     Run a command on remote
-  ragent init             Create .ragent.json in current directory
-  ragent setup            One-time SSH key + hook install
   ragent disconnect       Tear down SSH connection
 
 Config:
@@ -63,8 +62,6 @@ async function main() {
         process.exit(1);
       }
       const config = await loadConfig();
-      const { sshSocketPath } = await import("./config.ts");
-      const { $ } = await import("bun");
       const socket = sshSocketPath();
       const { exitCode } =
         await $`ssh -o ControlPath=${socket} ${config.host} ${cmd}`.nothrow();
@@ -73,35 +70,25 @@ async function main() {
     }
 
     case "init": {
-      const configPath = `${process.cwd()}/.ragent.json`;
-      const file = Bun.file(configPath);
-      if (await file.exists()) {
-        console.log(`.ragent.json already exists at ${configPath}`);
-        const config = await file.json();
-        console.log(JSON.stringify(config, null, 2));
-        process.exit(0);
-      }
-
-      const defaultConfig = {
-        host: "user@hostname",
-      };
-
-      await Bun.write(configPath, JSON.stringify(defaultConfig, null, 2) + "\n");
-      console.log(`Created ${configPath}`);
-      console.log("Edit it with your remote host, then run `ragent setup`.");
+      console.log("`ragent init` has been merged into `ragent setup`.");
+      console.log("Run `ragent setup` instead.");
       break;
     }
 
     case "setup": {
-      const config = await loadConfig();
-      await setup(config);
+      const { findConfigPath } = await import("./config.ts");
+      const configPath = await findConfigPath();
+      if (configPath) {
+        const config = await loadConfig();
+        await setup(config);
+      } else {
+        await setup();
+      }
       break;
     }
 
     case "disconnect": {
       const config = await loadConfig();
-      const { sshSocketPath } = await import("./config.ts");
-      const { $ } = await import("bun");
       const socket = sshSocketPath();
       await $`ssh -O exit -o ControlPath=${socket} ${config.host}`
         .nothrow()
