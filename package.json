@@ -1,0 +1,19 @@
+{
+  "name": "ragent",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "ragent": "./src/index.ts"
+  },
+  "scripts": {
+    "dev": "bun run src/index.ts",
+    "build": "bun build src/index.ts --compile --outfile ragent",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
