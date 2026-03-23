@@ -18,6 +18,7 @@ bun test                      # run tests
 - **src/fileserver.ts** — Local HTTP file server (Bun.serve) for transparent file fetching
 - **src/status.ts** — Connection/port/tmux dashboard
 - **src/push.ts** — Manual rsync file push with home dir path rewriting
+- **src/editor.ts** — Open remote project in VS Code or Zed via their SSH remote support
 - **src/setup.ts** — One-time SSH key gen + Claude Code PreToolUse hook install
 
 ## Conventions

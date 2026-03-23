@@ -13,6 +13,8 @@ Usage:
   ragent setup            First-time setup (config + SSH key + deps + connect)
   ragent status           Show connection status
   ragent push <file>      Push a file to remote
+  ragent code             Open remote project in VS Code
+  ragent zed              Open remote project in Zed
   ragent run <cmd...>     Run a command on remote
   ragent disconnect       Tear down SSH connection
 
@@ -52,6 +54,20 @@ async function main() {
       }
       const config = await loadConfig();
       await pushFile(config, file);
+      break;
+    }
+
+    case "code": {
+      const config = await loadConfig();
+      const { openCode } = await import("./editor.ts");
+      await openCode(config);
+      break;
+    }
+
+    case "zed": {
+      const config = await loadConfig();
+      const { openZed } = await import("./editor.ts");
+      await openZed(config);
       break;
     }
 
