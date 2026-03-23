@@ -10,8 +10,11 @@ function generateHookScript(localUser: string, remoteUser: string): string {
   return `#!/usr/bin/env bash
 # ragent: Claude Code PreToolUse hook for transparent file fetching
 # Fetches missing files from the local machine via reverse SSH tunnel
+# Uses updatedInput to redirect Claude to a local cache path
 
 set -euo pipefail
+
+CACHE_DIR="$HOME/.cache/ragent/files"
 
 # Read the file server port (written by ragent on connect)
 PORT_FILE="$HOME/.config/ragent/port"
@@ -40,13 +43,7 @@ if [ -z "$FILE_PATH" ]; then
   exit 0
 fi
 
-# Rewrite path: /Users/localUser/... -> /Users/remoteUser/...
-REMOTE_PATH=$(echo "$FILE_PATH" | sed "s|/Users/${localUser}/|/Users/${remoteUser}/|")
-
-# If file already exists, nothing to do
-if [ -f "$REMOTE_PATH" ]; then
-  exit 0
-fi
+# If the file exists locally, nothing to do
 if [ -f "$FILE_PATH" ]; then
   exit 0
 fi
@@ -58,8 +55,14 @@ TMPFILE=$(mktemp)
 HTTP_CODE=$(curl -s -o "$TMPFILE" -w "%{http_code}" "http://127.0.0.1:$PORT/fetch?path=$ENCODED_PATH" 2>/dev/null || echo "000")
 
 if [ "$HTTP_CODE" = "200" ]; then
-  mkdir -p "$(dirname "$REMOTE_PATH")"
-  mv "$TMPFILE" "$REMOTE_PATH"
+  mkdir -p "$CACHE_DIR"
+  BASENAME=$(basename "$FILE_PATH")
+  UUID=$(uuidgen 2>/dev/null || cat /proc/sys/kernel/random/uuid 2>/dev/null || echo $$)
+  CACHED="$CACHE_DIR/\${UUID}-\${BASENAME}"
+  mv "$TMPFILE" "$CACHED"
+  cat <<ENDJSON
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"file_path":"$CACHED"}}}
+ENDJSON
 else
   rm -f "$TMPFILE"
 fi
@@ -223,7 +226,7 @@ async function installPrereqs(
     {
       name: "Claude Code",
       check: "command -v claude",
-      install: "npm install -g @anthropic-ai/claude-code",
+      install: "curl -fsSL https://cli.claude.ai/install.sh | sh",
     },
   ];
 
@@ -297,7 +300,7 @@ export async function setup(config?: RagentConfig): Promise<void> {
 
   const home = homedir();
   const keyPath = join(home, ".ssh", "id_ed25519");
-  const socket = sshSocketPath();
+  const socket = sshSocketPath(config.session);
 
   // Step 1: SSH key
   console.log("--- SSH Key ---");
@@ -329,9 +332,9 @@ export async function setup(config?: RagentConfig): Promise<void> {
     process.exit(1);
   }
 
-  // Step 3: Establish ControlMaster for subsequent commands
+  // Step 3: Establish ControlMaster for subsequent commands (reuse existing if present)
   console.log("\n--- Establishing connection ---");
-  await $`ssh -o ControlMaster=yes -o ControlPath=${socket} -o ControlPersist=300 ${config.host} ${{
+  await $`ssh -o ControlMaster=auto -o ControlPath=${socket} -o ControlPersist=300 ${config.host} ${{
     raw: "echo 'Connection established'",
   }}`;
 

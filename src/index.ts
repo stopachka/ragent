@@ -62,7 +62,7 @@ async function main() {
         process.exit(1);
       }
       const config = await loadConfig();
-      const socket = sshSocketPath();
+      const socket = sshSocketPath(config.session);
       const { exitCode } =
         await $`ssh -o ControlPath=${socket} ${config.host} ${cmd}`.nothrow();
       process.exit(exitCode);
@@ -89,7 +89,7 @@ async function main() {
 
     case "disconnect": {
       const config = await loadConfig();
-      const socket = sshSocketPath();
+      const socket = sshSocketPath(config.session);
       await $`ssh -O exit -o ControlPath=${socket} ${config.host}`
         .nothrow()
         .quiet();

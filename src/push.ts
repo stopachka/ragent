@@ -27,7 +27,7 @@ export async function pushFile(
     remotePath = `/Users/${remoteUser}${absPath.slice(home.length)}`;
   }
 
-  const socket = sshSocketPath();
+  const socket = sshSocketPath(config.session);
 
   await $`ssh -o ControlPath=${socket} ${config.host} ${{
     raw: `mkdir -p "$(dirname '${remotePath}')"`,

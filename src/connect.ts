@@ -17,8 +17,7 @@ async function syncTerminfo(host: string): Promise<void> {
 }
 
 /** Check if the SSH ControlMaster socket is alive */
-async function isSocketAlive(host: string): Promise<boolean> {
-  const socket = sshSocketPath();
+async function isSocketAlive(host: string, socket: string): Promise<boolean> {
   if (!(await Bun.file(socket).exists())) return false;
 
   const { exitCode } = await $`ssh -O check -o ControlPath=${socket} ${host}`
@@ -29,11 +28,10 @@ async function isSocketAlive(host: string): Promise<boolean> {
 }
 
 /** Clean up a stale SSH socket */
-async function cleanStaleSocket(host: string): Promise<void> {
-  const socket = sshSocketPath();
+async function cleanStaleSocket(host: string, socket: string): Promise<void> {
   if (!(await Bun.file(socket).exists())) return;
 
-  if (!(await isSocketAlive(host))) {
+  if (!(await isSocketAlive(host, socket))) {
     try {
       await Bun.file(socket).delete();
     } catch {
@@ -42,20 +40,12 @@ async function cleanStaleSocket(host: string): Promise<void> {
   }
 }
 
-/** Write the file server port to remote so the hook can read it */
-async function writeRemotePort(host: string, port: number): Promise<void> {
-  const socket = sshSocketPath();
-  await $`ssh -o ControlPath=${socket} ${host} ${{
-    raw: `mkdir -p ~/.config/ragent && echo ${port} > ~/.config/ragent/port`,
-  }}`.nothrow().quiet();
-}
-
 /** Build SSH command arguments */
 export function buildSshArgs(
   config: RagentConfig,
   fileServerPort: number,
 ): string[] {
-  const socket = sshSocketPath();
+  const socket = sshSocketPath(config.session);
   const args: string[] = [
     "ssh",
     "-t",
@@ -77,7 +67,7 @@ export function buildSshArgs(
   args.push("-R", `${fileServerPort}:localhost:${fileServerPort}`);
 
   args.push(config.host);
-  args.push(`bash -lc 'tmux new-session -As ${config.session} -c ${config.dir}'`);
+  args.push(`bash -lc 'mkdir -p ~/.config/ragent && echo ${fileServerPort} > ~/.config/ragent/port && tmux new-session -As ${config.session} -c ${config.dir}'`);
 
   return args;
 }
@@ -93,6 +83,12 @@ const CLEAN_EXIT_CODES = new Set([0]);
  */
 export async function connect(config: RagentConfig): Promise<void> {
   let interrupted = false;
+  const socket = sshSocketPath(config.session);
+
+  async function teardown() {
+    stopFileServer();
+    await $`ssh -O exit -o ControlPath=${socket} ${config.host}`.nothrow().quiet();
+  }
 
   process.on("SIGINT", () => {
     interrupted = true;
@@ -101,7 +97,7 @@ export async function connect(config: RagentConfig): Promise<void> {
   await syncTerminfo(config.host);
 
   while (true) {
-    await cleanStaleSocket(config.host);
+    await cleanStaleSocket(config.host, socket);
 
     const port = startFileServer();
     console.log(`File server on port ${port}`);
@@ -116,13 +112,6 @@ export async function connect(config: RagentConfig): Promise<void> {
     console.log(`  Reverse tunnel: ${port}`);
     console.log("");
 
-    // Write port file to remote once connection is established
-    // We do this in the background after a short delay to let ControlMaster connect
-    const portWritePromise = (async () => {
-      await Bun.sleep(2000);
-      await writeRemotePort(config.host, port);
-    })();
-
     const proc = Bun.spawn(args, {
       stdin: "inherit",
       stdout: "inherit",
@@ -134,11 +123,13 @@ export async function connect(config: RagentConfig): Promise<void> {
     stopFileServer();
 
     if (interrupted) {
+      await teardown();
       console.log("\nDisconnected.");
       process.exit(0);
     }
 
     if (CLEAN_EXIT_CODES.has(exitCode)) {
+      await teardown();
       console.log("Session ended.");
       process.exit(0);
     }
@@ -149,6 +140,7 @@ export async function connect(config: RagentConfig): Promise<void> {
     await Bun.sleep(3000);
 
     if (interrupted) {
+      await teardown();
       console.log("\nDisconnected.");
       process.exit(0);
     }

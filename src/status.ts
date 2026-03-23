@@ -2,8 +2,7 @@ import { $ } from "bun";
 import { type RagentConfig, sshSocketPath } from "./config.ts";
 import { getFileServerPort } from "./fileserver.ts";
 
-async function isSocketAlive(host: string): Promise<boolean> {
-  const socket = sshSocketPath();
+async function isSocketAlive(host: string, socket: string): Promise<boolean> {
   if (!(await Bun.file(socket).exists())) return false;
 
   const { exitCode } = await $`ssh -O check -o ControlPath=${socket} ${host}`
@@ -21,8 +20,7 @@ async function checkPortListening(port: string): Promise<boolean> {
   return exitCode === 0;
 }
 
-async function getRemoteTmuxSessions(host: string): Promise<string> {
-  const socket = sshSocketPath();
+async function getRemoteTmuxSessions(host: string, socket: string): Promise<string> {
   const { stdout, exitCode } =
     await $`ssh -o ControlPath=${socket} ${host} ${{ raw: "tmux list-sessions 2>/dev/null || echo '  (no sessions)'" }}`
       .nothrow()
@@ -33,7 +31,8 @@ async function getRemoteTmuxSessions(host: string): Promise<string> {
 }
 
 export async function showStatus(config: RagentConfig): Promise<void> {
-  const connected = await isSocketAlive(config.host);
+  const socket = sshSocketPath(config.session);
+  const connected = await isSocketAlive(config.host, socket);
 
   console.log("=== ragent status ===\n");
   console.log(`Host:       ${config.host}`);
@@ -59,7 +58,7 @@ export async function showStatus(config: RagentConfig): Promise<void> {
 
   if (connected) {
     console.log("\n--- Remote tmux ---");
-    console.log(await getRemoteTmuxSessions(config.host));
+    console.log(await getRemoteTmuxSessions(config.host, socket));
   }
 
   console.log("");

@@ -97,7 +97,8 @@ export function parseHost(host: string): { user: string; hostname: string } {
   return { user: process.env.USER ?? "root", hostname: host };
 }
 
-/** SSH socket path for ControlMaster */
-export function sshSocketPath(): string {
+/** SSH socket path for ControlMaster (per-session to allow parallel instances) */
+export function sshSocketPath(session?: string): string {
+  if (session) return `/tmp/ragent-ssh-${session}`;
   return "/tmp/ragent-ssh-socket";
 }
