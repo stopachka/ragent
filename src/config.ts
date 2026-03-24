@@ -1,4 +1,4 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 
 export interface RagentConfig {
@@ -8,80 +8,95 @@ export interface RagentConfig {
   ports: string[]; // Ports to forward (e.g. ["3000", "4000:5000"])
 }
 
-interface RawConfig {
-  host?: string;
-  dir?: string;
-  session?: string;
+interface PathOverrides {
   ports?: string[];
+  session?: string;
+  host?: string;
 }
 
-const CONFIG_NAME = ".ragent.json";
+interface RagentFileConfig {
+  host: string;
+  ports?: string[];
+  paths?: Record<string, PathOverrides>;
+}
 
-/**
- * Walk up from `startDir` looking for .ragent.json.
- * Falls back to ~/.ragent.json.
- * Returns null if nothing found.
- */
-export async function findConfigPath(startDir?: string): Promise<string | null> {
-  const start = resolve(startDir ?? process.cwd());
-  const home = homedir();
-
-  let dir = start;
-  while (true) {
-    const candidate = join(dir, CONFIG_NAME);
-    if (await Bun.file(candidate).exists()) return candidate;
-    const parent = dirname(dir);
-    if (parent === dir) break;
-    dir = parent;
-  }
-
-  const global = join(home, CONFIG_NAME);
-  if (await Bun.file(global).exists()) return global;
-
-  return null;
+/** Central config location */
+export function configPath(): string {
+  return join(homedir(), ".config", "ragent", "config.json");
 }
 
 /**
  * Derive the remote directory by mirroring the local path relative to $HOME.
  * e.g. local /Users/stopa/projects/instant → ~/projects/instant on remote
  */
-function defaultRemoteDir(localDir: string): string {
-  const home = homedir();
-  if (localDir.startsWith(home)) {
-    const rel = localDir.slice(home.length);
+export function defaultRemoteDir(localDir: string, home?: string): string {
+  const h = home ?? homedir();
+  if (localDir.startsWith(h)) {
+    const rel = localDir.slice(h.length);
     return "~" + rel;
   }
   return "~/";
 }
 
-export async function loadConfig(startDir?: string): Promise<RagentConfig> {
-  const configPath = await findConfigPath(startDir);
-  if (!configPath) {
-    console.error("No .ragent.json found. Run `ragent init` to create one.");
+function normalizePath(p: string): string {
+  return p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p;
+}
+
+function findPathOverrides(
+  paths: Record<string, PathOverrides> | undefined,
+  remoteDir: string,
+): PathOverrides | undefined {
+  if (!paths) return undefined;
+  const normalized = normalizePath(remoteDir);
+  for (const [key, value] of Object.entries(paths)) {
+    if (normalizePath(key) === normalized) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Pure resolution logic — given a parsed config file, cwd, and home dir,
+ * produce the resolved RagentConfig.
+ */
+export function resolveConfig(
+  raw: RagentFileConfig,
+  cwd: string,
+  home: string,
+): RagentConfig {
+  const remoteDir = defaultRemoteDir(cwd, home);
+  const overrides = findPathOverrides(raw.paths, remoteDir);
+
+  return {
+    host: overrides?.host ?? raw.host,
+    dir: remoteDir,
+    session: overrides?.session ?? basename(remoteDir),
+    ports: overrides?.ports ?? raw.ports ?? [],
+  };
+}
+
+export async function loadConfig(): Promise<RagentConfig> {
+  const cfgPath = configPath();
+  const file = Bun.file(cfgPath);
+
+  if (!(await file.exists())) {
+    console.error("No config found. Run `ragent setup` to create one.");
     process.exit(1);
   }
 
-  let raw: RawConfig;
+  let raw: RagentFileConfig;
   try {
-    raw = await Bun.file(configPath).json();
+    raw = await file.json();
   } catch (e) {
-    console.error(`Failed to parse ${configPath}: ${e}`);
+    console.error(`Failed to parse ${cfgPath}: ${e}`);
     process.exit(1);
   }
 
   if (!raw.host) {
-    console.error(`"host" is required in ${configPath}`);
+    console.error(`"host" is required in ${cfgPath}`);
     process.exit(1);
   }
 
-  const cwd = process.cwd();
-
-  return {
-    host: raw.host,
-    dir: raw.dir ?? defaultRemoteDir(cwd),
-    session: raw.session ?? basename(cwd),
-    ports: raw.ports ?? [],
-  };
+  return resolveConfig(raw, process.cwd(), homedir());
 }
 
 /**

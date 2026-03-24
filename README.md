@@ -17,29 +17,28 @@ Requires [Bun](https://bun.sh) to build. The compiled binary has no runtime depe
 ## Quick Start
 
 ```bash
-# 1. Create config in your project
-cd ~/projects/myapp
-ragent init
-# Edit .ragent.json with your remote host
-
-# 2. One-time setup (SSH key + Claude Code hook)
+# 1. One-time setup (config + SSH key + Claude Code hook)
 ragent setup
 
-# 3. Connect
+# 2. Connect from any project directory
+cd ~/projects/myapp
 ragent
 # You're now in tmux on the remote. Ports forwarded. Auto-reconnect on.
 ```
 
 ## Config
 
-Place a `.ragent.json` in your project directory:
+Central config at `~/.config/ragent/config.json`:
 
 ```json
 {
   "host": "user@hostname",
-  "dir": "~/projects/myapp",
-  "session": "myapp",
-  "ports": ["3000", "4000", "8888"]
+  "ports": ["3000"],
+  "paths": {
+    "~/projects/myapp": {
+      "ports": ["8080", "4000"]
+    }
+  }
 }
 ```
 
@@ -48,11 +47,18 @@ Only `host` is required. Everything else has smart defaults:
 | Field | Default | Description |
 |-------|---------|-------------|
 | `host` | — | SSH destination (required). Any reachable host. |
-| `dir` | mirrors local path | Remote working directory |
-| `session` | directory name | tmux session name |
-| `ports` | none | Ports to forward (local:remote or just port) |
+| `ports` | none | Default ports to forward for all projects |
+| `paths` | none | Per-project overrides keyed by remote directory |
 
-Config lookup: `.ragent.json` in cwd → walk up parent dirs → `~/.ragent.json` (global fallback).
+Per-path overrides:
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `ports` | top-level ports | Ports to forward (replaces top-level) |
+| `session` | directory name | tmux session name |
+| `host` | top-level host | SSH destination override |
+
+Remote directory is derived from your local cwd: `~/projects/myapp` locally maps to `~/projects/myapp` on the remote. Per-path overrides are matched against this derived path.
 
 ## Commands
 
@@ -61,9 +67,10 @@ Config lookup: `.ragent.json` in cwd → walk up parent dirs → `~/.ragent.json
 | `ragent` | Connect with auto-reconnect |
 | `ragent status` | Show connection, ports, tmux sessions |
 | `ragent push <file>` | Push a file to the same path on remote |
+| `ragent code` | Open remote project in VS Code |
+| `ragent zed` | Open remote project in Zed |
 | `ragent run <cmd>` | Run a command on the remote |
-| `ragent init` | Create `.ragent.json` in current directory |
-| `ragent setup` | One-time: SSH key + Claude Code hook install |
+| `ragent setup` | One-time: config + SSH key + Claude Code hook install |
 | `ragent disconnect` | Tear down SSH connection |
 
 ## How It Works

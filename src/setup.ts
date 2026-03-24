@@ -1,7 +1,13 @@
 import { $ } from "bun";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { type RagentConfig, parseHost, sshSocketPath } from "./config.ts";
+import { dirname, join } from "node:path";
+import {
+  type RagentConfig,
+  configPath,
+  defaultRemoteDir,
+  parseHost,
+  sshSocketPath,
+} from "./config.ts";
 
 /**
  * Generate the dynamic hook script that reads port from a runtime file.
@@ -275,24 +281,33 @@ async function promptInput(question: string): Promise<string> {
  * 4. Install remote prerequisites
  */
 export async function setup(config?: RagentConfig): Promise<void> {
-  // Step 0: Create .ragent.json if needed
+  // Step 0: Create config if needed
   if (!config) {
-    const configPath = `${process.cwd()}/.ragent.json`;
+    const cfgPath = configPath();
+    const { mkdirSync } = await import("node:fs");
+    mkdirSync(dirname(cfgPath), { recursive: true });
+
     const host = await promptInput("Remote host (user@hostname): ");
     if (!host) {
       console.error("Host is required.");
       process.exit(1);
     }
-    const portsRaw = await promptInput("Ports to forward (comma-separated, or empty): ");
+
+    const remoteDir = defaultRemoteDir(process.cwd());
+    const portsRaw = await promptInput(
+      `Ports to forward for ${remoteDir} (comma-separated, or empty): `,
+    );
     const ports = portsRaw
       ? portsRaw.split(",").map((p) => p.trim()).filter(Boolean)
       : [];
 
-    const rawConfig: Record<string, unknown> = { host };
-    if (ports.length > 0) rawConfig.ports = ports;
+    const fileConfig: Record<string, unknown> = { host };
+    if (ports.length > 0) {
+      fileConfig.paths = { [remoteDir]: { ports } };
+    }
 
-    await Bun.write(configPath, JSON.stringify(rawConfig, null, 2) + "\n");
-    console.log(`Created ${configPath}\n`);
+    await Bun.write(cfgPath, JSON.stringify(fileConfig, null, 2) + "\n");
+    console.log(`Created ${cfgPath}\n`);
 
     const { loadConfig } = await import("./config.ts");
     config = await loadConfig();

@@ -1,5 +1,5 @@
 import { $ } from "bun";
-import { loadConfig, sshSocketPath } from "./config.ts";
+import { configPath, loadConfig, sshSocketPath } from "./config.ts";
 import { connect } from "./connect.ts";
 import { showStatus } from "./status.ts";
 import { pushFile } from "./push.ts";
@@ -19,12 +19,15 @@ Usage:
   ragent disconnect       Tear down SSH connection
 
 Config:
-  Place a .ragent.json in your project directory:
+  ~/.config/ragent/config.json:
   {
     "host": "user@hostname",     // required
-    "dir": "~/projects/myapp",   // default: mirrors local path
-    "session": "myapp",          // default: directory name
-    "ports": ["3000", "8080"]    // default: none
+    "ports": ["3000"],           // default ports for all projects
+    "paths": {
+      "~/projects/myapp": {      // per-project overrides
+        "ports": ["8080"]
+      }
+    }
   }
 `.trim();
 
@@ -92,9 +95,8 @@ async function main() {
     }
 
     case "setup": {
-      const { findConfigPath } = await import("./config.ts");
-      const configPath = await findConfigPath();
-      if (configPath) {
+      const exists = await Bun.file(configPath()).exists();
+      if (exists) {
         const config = await loadConfig();
         await setup(config);
       } else {

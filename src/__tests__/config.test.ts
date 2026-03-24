@@ -1,47 +1,126 @@
-import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { join } from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { findConfigPath, parseHost, sshSocketPath } from "../config.ts";
+import { describe, test, expect } from "bun:test";
+import {
+  configPath,
+  defaultRemoteDir,
+  resolveConfig,
+  parseHost,
+  sshSocketPath,
+} from "../config.ts";
 
-describe("findConfigPath", () => {
-  let tmpDir: string;
+describe("configPath", () => {
+  test("returns path under ~/.config/ragent/", () => {
+    expect(configPath()).toContain(".config/ragent/config.json");
+  });
+});
 
-  beforeEach(() => {
-    tmpDir = mkdtempSync(join(tmpdir(), "ragent-test-"));
+describe("defaultRemoteDir", () => {
+  test("mirrors local path relative to home", () => {
+    expect(defaultRemoteDir("/Users/stopa/projects/foo", "/Users/stopa")).toBe(
+      "~/projects/foo",
+    );
   });
 
-  afterEach(() => {
-    rmSync(tmpDir, { recursive: true, force: true });
+  test("returns ~/ for paths outside home", () => {
+    expect(defaultRemoteDir("/opt/something", "/Users/stopa")).toBe("~/");
+  });
+});
+
+describe("resolveConfig", () => {
+  test("uses host from top-level config", () => {
+    const result = resolveConfig(
+      { host: "user@host" },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.host).toBe("user@host");
   });
 
-  test("finds .ragent.json in the given directory", async () => {
-    const configPath = join(tmpDir, ".ragent.json");
-    await Bun.write(configPath, JSON.stringify({ host: "test@host" }));
-
-    const result = await findConfigPath(tmpDir);
-    expect(result).toBe(configPath);
+  test("derives remote dir from cwd relative to home", () => {
+    const result = resolveConfig(
+      { host: "user@host" },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.dir).toBe("~/projects/foo");
   });
 
-  test("walks up to find .ragent.json in parent directory", async () => {
-    const child = join(tmpDir, "sub", "deep");
-    const { mkdirSync } = await import("node:fs");
-    mkdirSync(child, { recursive: true });
-
-    const configPath = join(tmpDir, ".ragent.json");
-    await Bun.write(configPath, JSON.stringify({ host: "test@host" }));
-
-    const result = await findConfigPath(child);
-    expect(result).toBe(configPath);
+  test("uses session from basename of remote dir", () => {
+    const result = resolveConfig(
+      { host: "user@host" },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.session).toBe("foo");
   });
 
-  test("returns null when no config found", async () => {
-    // Use a dir with no config and that won't walk up to a real one
-    const emptyDir = mkdtempSync(join(tmpdir(), "ragent-empty-"));
-    const result = await findConfigPath(emptyDir);
-    rmSync(emptyDir, { recursive: true, force: true });
-    // May find ~/.ragent.json — that's ok. Just checking it doesn't crash.
-    expect(result === null || typeof result === "string").toBe(true);
+  test("uses top-level ports as default", () => {
+    const result = resolveConfig(
+      { host: "user@host", ports: ["3000"] },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.ports).toEqual(["3000"]);
+  });
+
+  test("path-level ports replace top-level ports", () => {
+    const result = resolveConfig(
+      {
+        host: "user@host",
+        ports: ["3000"],
+        paths: { "~/projects/foo": { ports: ["8080"] } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.ports).toEqual(["8080"]);
+  });
+
+  test("returns empty ports when no match and no top-level", () => {
+    const result = resolveConfig(
+      {
+        host: "user@host",
+        paths: { "~/projects/bar": { ports: ["3000"] } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.ports).toEqual([]);
+  });
+
+  test("handles trailing slash in path keys", () => {
+    const result = resolveConfig(
+      {
+        host: "user@host",
+        paths: { "~/projects/foo/": { ports: ["8080"] } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.ports).toEqual(["8080"]);
+  });
+
+  test("allows session override per path", () => {
+    const result = resolveConfig(
+      {
+        host: "user@host",
+        paths: { "~/projects/foo": { session: "custom" } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.session).toBe("custom");
+  });
+
+  test("allows host override per path", () => {
+    const result = resolveConfig(
+      {
+        host: "user@default",
+        paths: { "~/projects/foo": { host: "user@other" } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+    );
+    expect(result.host).toBe("user@other");
   });
 });
 
