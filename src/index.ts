@@ -9,14 +9,17 @@ const HELP = `
 ragent — Seamless remote Claude Code sessions
 
 Usage:
-  ragent                  Connect (SSH + tmux + ports + file server)
-  ragent setup            First-time setup (config + SSH key + deps + connect)
-  ragent status           Show connection status
-  ragent push <file>      Push a file to remote
-  ragent code             Open remote project in VS Code
-  ragent zed              Open remote project in Zed
-  ragent run <cmd...>     Run a command on remote
-  ragent disconnect       Tear down SSH connection
+  ragent [path]             Connect (SSH + tmux + ports + file server)
+  ragent setup              First-time setup (config + SSH key + deps + connect)
+  ragent status [path]      Show connection status
+  ragent push <file>        Push a file to remote
+  ragent code [path]        Open remote project in VS Code
+  ragent zed [path]         Open remote project in Zed
+  ragent run <cmd...>       Run a command on remote
+  ragent disconnect [path]  Tear down SSH connection
+
+  [path] can be ~/projects/myapp, /absolute/path, or ./relative.
+  If omitted, uses the current directory.
 
 Config:
   ~/.config/ragent/config.json:
@@ -31,56 +34,86 @@ Config:
   }
 `.trim();
 
+const KNOWN_COMMANDS = new Set([
+  "connect", "status", "push", "code", "zed",
+  "run", "init", "setup", "disconnect", "help", "--help", "-h",
+]);
+
+function looksLikePath(arg: string): boolean {
+  return arg.startsWith("/") || arg.startsWith("~") || arg.startsWith(".");
+}
+
+function parseArgs(argv: string[]): { command: string; path?: string; rest: string[] } {
+  const first = argv[0];
+  if (!first) return { command: "connect", rest: [] };
+
+  if (looksLikePath(first)) {
+    return { command: "connect", path: first, rest: argv.slice(1) };
+  }
+
+  if (KNOWN_COMMANDS.has(first)) {
+    const second = argv[1];
+    // Commands that accept an optional trailing path
+    const pathCommands = new Set(["connect", "status", "code", "zed", "disconnect"]);
+    if (pathCommands.has(first) && second && looksLikePath(second)) {
+      return { command: first, path: second, rest: argv.slice(2) };
+    }
+    return { command: first, rest: argv.slice(1) };
+  }
+
+  return { command: first, rest: argv.slice(1) };
+}
+
 async function main() {
   const args = process.argv.slice(2);
-  const command = args[0] ?? "connect";
+  const { command, path, rest } = parseArgs(args);
 
   switch (command) {
     case "connect":
     case undefined: {
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       await connect(config);
       break;
     }
 
     case "status": {
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       await showStatus(config);
       break;
     }
 
     case "push": {
-      const file = args[1];
+      const file = rest[0];
       if (!file) {
         console.error("Usage: ragent push <file>");
         process.exit(1);
       }
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       await pushFile(config, file);
       break;
     }
 
     case "code": {
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       const { openCode } = await import("./editor.ts");
       await openCode(config);
       break;
     }
 
     case "zed": {
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       const { openZed } = await import("./editor.ts");
       await openZed(config);
       break;
     }
 
     case "run": {
-      const cmd = args.slice(1).join(" ");
+      const cmd = rest.join(" ");
       if (!cmd) {
         console.error("Usage: ragent run <command>");
         process.exit(1);
       }
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       const socket = sshSocketPath(config.session);
       const { exitCode } =
         await $`ssh -o ControlPath=${socket} ${config.host} ${cmd}`.nothrow();
@@ -106,7 +139,7 @@ async function main() {
     }
 
     case "disconnect": {
-      const config = await loadConfig();
+      const config = await loadConfig(path);
       const socket = sshSocketPath(config.session);
       await $`ssh -O exit -o ControlPath=${socket} ${config.host}`
         .nothrow()

@@ -3,6 +3,7 @@ import {
   configPath,
   defaultRemoteDir,
   resolveConfig,
+  resolveRemotePath,
   parseHost,
   sshSocketPath,
 } from "../config.ts";
@@ -121,6 +122,69 @@ describe("resolveConfig", () => {
       "/Users/stopa",
     );
     expect(result.host).toBe("user@other");
+  });
+});
+
+describe("resolveRemotePath", () => {
+  test("tilde path used as-is", () => {
+    expect(resolveRemotePath("~/projects/bar", "/Users/stopa", "/Users/stopa")).toBe(
+      "~/projects/bar",
+    );
+  });
+
+  test("absolute path used as-is", () => {
+    expect(resolveRemotePath("/home/user/foo", "/Users/stopa", "/Users/stopa")).toBe(
+      "/home/user/foo",
+    );
+  });
+
+  test("strips trailing slash", () => {
+    expect(resolveRemotePath("~/projects/bar/", "/Users/stopa", "/Users/stopa")).toBe(
+      "~/projects/bar",
+    );
+  });
+
+  test("relative path resolves against cwd then mirrors", () => {
+    expect(
+      resolveRemotePath("./sub", "/Users/stopa/projects/foo", "/Users/stopa"),
+    ).toBe("~/projects/foo/sub");
+  });
+});
+
+describe("resolveConfig with remotePath", () => {
+  test("uses remotePath instead of cwd", () => {
+    const result = resolveConfig(
+      { host: "user@host" },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+      "~/projects/bar",
+    );
+    expect(result.dir).toBe("~/projects/bar");
+    expect(result.session).toBe("bar");
+  });
+
+  test("path overrides still match with remotePath", () => {
+    const result = resolveConfig(
+      {
+        host: "user@host",
+        ports: ["3000"],
+        paths: { "~/projects/bar": { ports: ["9090"] } },
+      },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+      "~/projects/bar",
+    );
+    expect(result.ports).toEqual(["9090"]);
+  });
+
+  test("undefined remotePath falls back to cwd", () => {
+    const result = resolveConfig(
+      { host: "user@host" },
+      "/Users/stopa/projects/foo",
+      "/Users/stopa",
+      undefined,
+    );
+    expect(result.dir).toBe("~/projects/foo");
   });
 });
 

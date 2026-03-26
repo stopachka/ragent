@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 export interface RagentConfig {
@@ -42,6 +42,22 @@ function normalizePath(p: string): string {
   return p.endsWith("/") && p.length > 1 ? p.slice(0, -1) : p;
 }
 
+/**
+ * Resolve a user-provided path to a remote directory.
+ * - ~/... or /... → use as-is (already a remote path)
+ * - Relative → resolve against cwd, then mirror via defaultRemoteDir
+ */
+export function resolveRemotePath(
+  input: string,
+  cwd: string,
+  home: string,
+): string {
+  if (input.startsWith("~") || input.startsWith("/")) {
+    return normalizePath(input);
+  }
+  return defaultRemoteDir(resolve(cwd, input), home);
+}
+
 function findPathOverrides(
   paths: Record<string, PathOverrides> | undefined,
   remoteDir: string,
@@ -62,8 +78,11 @@ export function resolveConfig(
   raw: RagentFileConfig,
   cwd: string,
   home: string,
+  remotePath?: string,
 ): RagentConfig {
-  const remoteDir = defaultRemoteDir(cwd, home);
+  const remoteDir = remotePath
+    ? resolveRemotePath(remotePath, cwd, home)
+    : defaultRemoteDir(cwd, home);
   const overrides = findPathOverrides(raw.paths, remoteDir);
 
   return {
@@ -74,7 +93,7 @@ export function resolveConfig(
   };
 }
 
-export async function loadConfig(): Promise<RagentConfig> {
+export async function loadConfig(remotePath?: string): Promise<RagentConfig> {
   const cfgPath = configPath();
   const file = Bun.file(cfgPath);
 
@@ -96,7 +115,7 @@ export async function loadConfig(): Promise<RagentConfig> {
     process.exit(1);
   }
 
-  return resolveConfig(raw, process.cwd(), homedir());
+  return resolveConfig(raw, process.cwd(), homedir(), remotePath);
 }
 
 /**
